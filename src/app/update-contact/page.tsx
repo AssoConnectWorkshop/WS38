@@ -68,9 +68,9 @@ async function updatePerson(
   firstname: string,
   lastname: string
 ): Promise<Contact> {
-  return apiRequest<Contact>(`/api/v1/crm/persons/${contactId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ firstname, lastname }),
+  return apiRequest<Contact>(`/api/v1/crm/people/${contactId}`, {
+    method: "PUT",
+    body: JSON.stringify({ firstName: firstname, lastName: lastname }),
   });
 }
 
