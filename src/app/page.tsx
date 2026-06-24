@@ -43,7 +43,7 @@ export default async function Home() {
       </div>
       <div className="flex flex-col items-center gap-4">
         <Image src="/mascot.png" alt="Mascot" width={160} height={160} priority />
-        <h1 className="text-4xl font-bold">Welcome young padawan!</h1>
+        <h1 className="text-4xl font-bold">Padawan Hanna is ready</h1>
       </div>
 
       <div className="flex flex-col gap-6 w-full max-w-md">
