@@ -86,10 +86,10 @@ async function listContacts(): Promise<Contact[]> {
 
 async function runUpdate(): Promise<{ success: boolean; message: string; contact?: Contact; debug?: Contact[] }> {
   try {
-    const contact = await findContact("Pierre", "Foucault");
+    const contact = await findContact("Samia", "Parrot");
     if (!contact) {
       const all = await listContacts();
-      return { success: false, message: "Contact Pierre Foucault introuvable. Voici les 25 premiers contacts :", debug: all };
+      return { success: false, message: "Contact Samia Parrot introuvable. Voici les 25 premiers contacts :", debug: all };
     }
 
     const contactIdMatch = contact["@id"].match(/\/([^/]+)$/);
@@ -111,7 +111,7 @@ async function runUpdate(): Promise<{ success: boolean; message: string; contact
     }
     const personId = personIdMatch[1];
 
-    const updated = await updatePerson(personId, "Henri", "Debreuil");
+    const updated = await updatePerson(personId, "Bob", "Parrot");
     return {
       success: true,
       message: `Contact mis à jour avec succès (person id: ${personId})`,
