@@ -8,6 +8,7 @@ type Contact = {
   firstname?: string;
   lastname?: string;
   email?: string;
+  person?: string;
 };
 
 type ContactsCollection = {
@@ -81,16 +82,29 @@ async function runUpdate(): Promise<{ success: boolean; message: string; contact
       return { success: false, message: "Contact Pierre Foucault introuvable." };
     }
 
-    const idMatch = contact["@id"].match(/\/([^/]+)$/);
-    if (!idMatch) {
+    const contactIdMatch = contact["@id"].match(/\/([^/]+)$/);
+    if (!contactIdMatch) {
       return { success: false, message: `ID de contact invalide: ${contact["@id"]}` };
     }
-    const contactId = idMatch[1];
+    const contactId = contactIdMatch[1];
 
-    const updated = await updatePerson(contactId, "Henri", "Debreuil");
+    const fullContact = await apiRequest<Contact>(`/api/v1/crm/contacts/${contactId}`);
+
+    const personIri = fullContact.person;
+    if (!personIri) {
+      return { success: false, message: `Pas de person IRI dans le contact. Réponse: ${JSON.stringify(fullContact)}` };
+    }
+
+    const personIdMatch = personIri.match(/\/([^/]+)$/);
+    if (!personIdMatch) {
+      return { success: false, message: `Person IRI invalide: ${personIri}` };
+    }
+    const personId = personIdMatch[1];
+
+    const updated = await updatePerson(personId, "Henri", "Debreuil");
     return {
       success: true,
-      message: `Contact mis à jour avec succès (id: ${contactId})`,
+      message: `Contact mis à jour avec succès (person id: ${personId})`,
       contact: updated,
     };
   } catch (e) {
