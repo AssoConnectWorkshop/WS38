@@ -75,11 +75,21 @@ async function updatePerson(
   });
 }
 
-async function runUpdate(): Promise<{ success: boolean; message: string; contact?: Contact }> {
+async function listContacts(): Promise<Contact[]> {
+  const ulid = process.env.ASSOCONNECT_ORGANIZATION_ULID;
+  if (!ulid) throw new Error("ASSOCONNECT_ORGANIZATION_ULID is not set");
+  const data = await apiRequest<ContactsCollection>(
+    `/api/v1/organizations/${ulid}/contacts?page=1&itemsPerPage=25&type=person`
+  );
+  return data["hydra:member"];
+}
+
+async function runUpdate(): Promise<{ success: boolean; message: string; contact?: Contact; debug?: Contact[] }> {
   try {
     const contact = await findContact("Pierre", "Foucault");
     if (!contact) {
-      return { success: false, message: "Contact Pierre Foucault introuvable." };
+      const all = await listContacts();
+      return { success: false, message: "Contact Pierre Foucault introuvable. Voici les 25 premiers contacts :", debug: all };
     }
 
     const contactIdMatch = contact["@id"].match(/\/([^/]+)$/);
@@ -133,6 +143,11 @@ export default async function UpdateContactPage() {
         {result.contact && (
           <pre className="mt-3 text-xs text-gray-400 overflow-auto">
             {JSON.stringify(result.contact, null, 2)}
+          </pre>
+        )}
+        {result.debug && (
+          <pre className="mt-3 text-xs text-gray-400 overflow-auto">
+            {result.debug.map(c => `${c.firstname ?? "?"} ${c.lastname ?? "?"}`).join("\n")}
           </pre>
         )}
       </div>
