@@ -1,6 +1,23 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { EvaluatedObjective, ObjectiveInput } from "./types";
 
+const CHECK_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    label: { type: "string" },
+    pass: { type: "boolean" },
+    note: { type: "string", description: "One short, specific sentence referencing the actual wording." },
+  },
+  required: ["label", "pass", "note"],
+};
+
+const SCORE_SCHEMA = {
+  type: "string" as const,
+  enum: ["calibrated", "needs_work", "off_target"],
+};
+
+// ---------- Stage 1: structure extraction ----------
+
 export function buildStructurePrompt(pastedText: string): string {
   return `Below is one team's OKR section, pasted as plain text. Extract its structure faithfully — do not evaluate
 it. Answer by calling the "report_structure" tool.
@@ -19,7 +36,6 @@ Rules:
 - If the pasted content has no recognizable Objectives, call the tool with the error field set to a short reason.`;
 }
 
-// Tool schema for the structure stage — the API returns this shape as validated JSON (tool_use.input).
 export const STRUCTURE_TOOL: Anthropic.Tool = {
   name: "report_structure",
   description: "Report the extracted OKR structure of one team's section.",
@@ -61,6 +77,8 @@ export const STRUCTURE_TOOL: Anthropic.Tool = {
   },
 };
 
+// ---------- Stage 2: per-objective evaluation ----------
+
 export function buildEvalPrompt(objective: ObjectiveInput, guidelines: string): string {
   const krLines = objective.key_results.length
     ? objective.key_results.map((k) => `- ${k.tag}: ${k.text}`).join("\n")
@@ -77,8 +95,19 @@ Objective ${objective.tag}: ${objective.text}
 Key Results:
 ${krLines}
 
-Respond with ONLY a single JSON object, no markdown fences, no commentary. Keep every "note" and
-"rewrite_suggestion" to one short, specific sentence, referencing the actual wording above.
+Answer by calling the "report_evaluation" tool. Keep every note and rewrite_suggestion to one short, specific
+sentence, referencing the actual wording above.
+
+Requirements for the tool call:
+- tag: "${objective.tag}"; text: the verbatim objective text above.
+- The objective's checks must be exactly these three, in order: "Ambitious", "Achievable this quarter",
+  "Simple / catchy".
+- Each key result's checks must be exactly these four, in order: "Specific & time-bound",
+  "Measurable & verifiable", "Outcome, not activity", "Aggressive yet realistic".
+- rewrite_suggestion must be an empty string when the score is "calibrated".
+- Include one key_results entry per KR listed above, with its exact tag and verbatim text. If there were no
+  explicit Key Results, return key_results: [] and let the objective's checks/rewrite_suggestion note that KRs
+  are missing.
 
 Calibration note for "Outcome, not activity": a KR with a concrete, verifiable target already attached (a signup
 count, revenue figure, % lift, churn rate, etc.) IS an outcome — pass this check. Do not fail a KR just because a
@@ -107,67 +136,56 @@ this check when the phrase has NO anchor at all and could describe genuinely dif
 reads it (e.g. "Improve onboarding", "Be more efficient", "Optimize the funnel" — no season, no campaign, no
 audience, nothing to picture). Do not fail or suggest a rewrite just because a more surgically precise version is
 theoretically possible — that is a taste preference, not a guideline violation, and proposing "sharper" wording for
-an already-clear, already-catchy Objective is exactly the over-nitpicking this tool must avoid.
-
-{
-  "tag": "${objective.tag}",
-  "text": "${objective.text.replace(/"/g, '\\"')}",
-  "has_explicit_krs": ${objective.has_explicit_krs ? "true" : "false"},
-  "score": "calibrated" | "needs_work" | "off_target",
-  "checks": [
-    {"label": "Ambitious", "pass": boolean, "note": string},
-    {"label": "Achievable this quarter", "pass": boolean, "note": string},
-    {"label": "Simple / catchy", "pass": boolean, "note": string}
-  ],
-  "rewrite_suggestion": "<empty string if score is calibrated>",
-  "key_results": [
-    {
-      "tag": "KR1",
-      "text": "<verbatim from above>",
-      "score": "calibrated" | "needs_work" | "off_target",
-      "checks": [
-        {"label": "Specific & time-bound", "pass": boolean, "note": string},
-        {"label": "Measurable & verifiable", "pass": boolean, "note": string},
-        {"label": "Outcome, not activity", "pass": boolean, "note": string},
-        {"label": "Aggressive yet realistic", "pass": boolean, "note": string}
-      ],
-      "rewrite_suggestion": "<empty string if score is calibrated>"
-    }
-  ]
+an already-clear, already-catchy Objective is exactly the over-nitpicking this tool must avoid.`;
 }
 
-If there were no explicit Key Results, return "key_results": [] and let the checks/rewrite_suggestion on the
-Objective itself note that KRs are missing.`;
-}
+export const EVAL_TOOL: Anthropic.Tool = {
+  name: "report_evaluation",
+  description: "Report the evaluation of one Objective and its Key Results.",
+  input_schema: {
+    type: "object",
+    properties: {
+      tag: { type: "string" },
+      text: { type: "string", description: "Verbatim objective text." },
+      score: SCORE_SCHEMA,
+      checks: {
+        type: "array",
+        description:
+          'Exactly three checks: "Ambitious", "Achievable this quarter", "Simple / catchy".',
+        items: CHECK_SCHEMA,
+      },
+      rewrite_suggestion: {
+        type: "string",
+        description: "Empty string if score is calibrated.",
+      },
+      key_results: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            tag: { type: "string" },
+            text: { type: "string", description: "Verbatim KR text." },
+            score: SCORE_SCHEMA,
+            checks: {
+              type: "array",
+              description:
+                'Exactly four checks: "Specific & time-bound", "Measurable & verifiable", "Outcome, not activity", "Aggressive yet realistic".',
+              items: CHECK_SCHEMA,
+            },
+            rewrite_suggestion: {
+              type: "string",
+              description: "Empty string if score is calibrated.",
+            },
+          },
+          required: ["tag", "text", "score", "checks", "rewrite_suggestion"],
+        },
+      },
+    },
+    required: ["tag", "text", "score", "checks", "rewrite_suggestion", "key_results"],
+  },
+};
 
-export function buildSynthesisPrompt(
-  sectionTitle: string,
-  objectives: EvaluatedObjective[],
-  guidelines: string
-): string {
-  const compact = objectives
-    .map((o) => `${o.tag} [${o.score}${o.has_explicit_krs ? "" : ", no explicit KRs"}]: ${o.text}`)
-    .join("\n");
-
-  return `Section "${sectionTitle}" has these evaluated Objectives:
-${compact}
-
-Guidelines for the 4 classic traps:
-${guidelines}
-
-Respond with ONLY a single JSON object, no markdown fences, no commentary.
-{
-  "structure_note": "<one sentence on overall structure, e.g. objective/KR count vs guideline>",
-  "within_max_5": ${objectives.length <= 5 ? "true" : "false"},
-  "traps": [
-    {"key": "not_ambitious_or_bau", "label": "Not ambitious / BAU", "detected": boolean, "evidence": "<short>"},
-    {"key": "task_list_not_okr", "label": "Task list, not OKRs", "detected": boolean, "evidence": "<short>"},
-    {"key": "compulsive_cascading", "label": "Compulsive cascading", "detected": boolean, "evidence": "<short>"},
-    {"key": "performance_management_risk", "label": "Performance-management risk", "detected": boolean, "evidence": "<short>"}
-  ],
-  "top_recommendations": ["<max 4 short, concrete, prioritized action items>"]
-}`;
-}
+// ---------- Stage 3: leniency review ----------
 
 export type FailedCheckItem = {
   id: string;
@@ -213,6 +231,94 @@ already a binary milestone that's a genuine stretch (a new build, a first launch
 wanted a bolted-on cadence or traffic number to make it feel more ambitious, overturn it — that ask is scope creep,
 not a real guideline gap.
 
-Respond with ONLY a JSON array, no markdown fences, no commentary:
-[ {"id": "<id from above, exact match>", "verdict": "uphold" | "overturn" | "soften", "note": "<revised one-sentence note>"} ]`;
+Answer by calling the "report_leniency_review" tool with one verdict per check listed above, using each id
+exactly as given.`;
 }
+
+export const LENIENCY_TOOL: Anthropic.Tool = {
+  name: "report_leniency_review",
+  description: "Report the second-pass verdict for each failed check.",
+  input_schema: {
+    type: "object",
+    properties: {
+      verdicts: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "The exact id from the list, unchanged." },
+            verdict: { type: "string", enum: ["uphold", "overturn", "soften"] },
+            note: { type: "string", description: "Revised one-sentence note." },
+          },
+          required: ["id", "verdict", "note"],
+        },
+      },
+    },
+    required: ["verdicts"],
+  },
+};
+
+// ---------- Stage 4: section-level synthesis ----------
+
+export function buildSynthesisPrompt(
+  sectionTitle: string,
+  objectives: EvaluatedObjective[],
+  guidelines: string
+): string {
+  const compact = objectives
+    .map((o) => `${o.tag} [${o.score}${o.has_explicit_krs ? "" : ", no explicit KRs"}]: ${o.text}`)
+    .join("\n");
+
+  return `Section "${sectionTitle}" has these evaluated Objectives:
+${compact}
+
+Guidelines for the 4 classic traps:
+${guidelines}
+
+Answer by calling the "report_synthesis" tool:
+- structure_note: one sentence on overall structure, e.g. objective/KR count vs guideline.
+- within_max_5: ${objectives.length <= 5 ? "true" : "false"} (${objectives.length} objectives).
+- traps: one entry per trap, using exactly these keys and labels:
+  not_ambitious_or_bau ("Not ambitious / BAU"), task_list_not_okr ("Task list, not OKRs"),
+  compulsive_cascading ("Compulsive cascading"), performance_management_risk ("Performance-management risk").
+- top_recommendations: max 4 short, concrete, prioritized action items.`;
+}
+
+export const SYNTHESIS_TOOL: Anthropic.Tool = {
+  name: "report_synthesis",
+  description: "Report the section-level synthesis: structure note, traps, recommendations.",
+  input_schema: {
+    type: "object",
+    properties: {
+      structure_note: { type: "string" },
+      within_max_5: { type: "boolean" },
+      traps: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            key: {
+              type: "string",
+              enum: [
+                "not_ambitious_or_bau",
+                "task_list_not_okr",
+                "compulsive_cascading",
+                "performance_management_risk",
+              ],
+            },
+            label: { type: "string" },
+            detected: { type: "boolean" },
+            evidence: { type: "string", description: "Short; empty string if not detected." },
+          },
+          required: ["key", "label", "detected", "evidence"],
+        },
+      },
+      top_recommendations: {
+        type: "array",
+        items: { type: "string" },
+        description: "Max 4 short, concrete, prioritized action items.",
+      },
+    },
+    required: ["structure_note", "within_max_5", "traps", "top_recommendations"],
+  },
+};

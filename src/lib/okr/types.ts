@@ -63,6 +63,7 @@ export type LeniencyStats = {
 };
 
 export type DiagnosticResult = {
+  run_id: string;
   section_title: string;
   objective_count: number;
   structure_note: string;
@@ -71,9 +72,20 @@ export type DiagnosticResult = {
   objectives: EvaluatedObjective[];
   top_recommendations: string[];
   leniency: LeniencyStats;
+  // Non-fatal degradations (e.g. one objective couldn't be scored) surfaced to the user.
+  warnings: string[];
+};
+
+export type TraceEntry = {
+  t: number;
+  level: "info" | "warn" | "error";
+  stage: string;
+  event: string;
+  data?: Record<string, unknown>;
 };
 
 export type ProgressEvent = { type: "status"; message: string };
-export type ResultEvent = { type: "result"; data: DiagnosticResult };
-export type ErrorEvent = { type: "error"; message: string };
-export type StreamEvent = ProgressEvent | ResultEvent | ErrorEvent;
+export type PingEvent = { type: "ping" };
+export type ResultEvent = { type: "result"; data: DiagnosticResult; trace?: TraceEntry[] };
+export type ErrorEvent = { type: "error"; message: string; run_id?: string };
+export type StreamEvent = ProgressEvent | PingEvent | ResultEvent | ErrorEvent;

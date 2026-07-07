@@ -160,19 +160,29 @@ async function streamDiagnostic(text: string, onEvent: (event: StreamEvent) => v
     body: JSON.stringify({ text }),
   });
 
-  if (!res.body) {
-    onEvent({ type: "error", message: `Request failed (${res.status}).` });
+  if (!res.ok || !res.body) {
+    onEvent({ type: "error", message: `Request failed (${res.status}). Try again in a moment.` });
     return;
   }
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let terminalEventSeen = false;
 
   const consumeLine = (line: string) => {
     const trimmed = line.trim();
     if (!trimmed) return;
-    onEvent(JSON.parse(trimmed) as StreamEvent);
+    let event: StreamEvent;
+    try {
+      event = JSON.parse(trimmed) as StreamEvent;
+    } catch {
+      // A malformed line must never take the UI down — skip it.
+      return;
+    }
+    if (event.type === "ping") return;
+    if (event.type === "result" || event.type === "error") terminalEventSeen = true;
+    onEvent(event);
   };
 
   while (true) {
@@ -186,6 +196,15 @@ async function streamDiagnostic(text: string, onEvent: (event: StreamEvent) => v
     }
   }
   consumeLine(buffer);
+
+  if (!terminalEventSeen) {
+    // The connection died mid-run (timeout, network drop) without a result or error event.
+    onEvent({
+      type: "error",
+      message:
+        "The diagnostic stream ended unexpectedly before finishing — this usually means the run timed out. Try again, or paste a smaller section.",
+    });
+  }
 }
 
 export default function OkrForm() {
@@ -279,6 +298,16 @@ export default function OkrForm() {
 
       {result && (
         <div>
+          {result.warnings.length > 0 && (
+            <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-relaxed text-amber-800">
+              <p className="mb-1 font-semibold">Partial results</p>
+              <ul className="list-disc space-y-1 pl-5">
+                {result.warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="mb-7 flex flex-col items-center gap-6 rounded-xl border border-gray-200 bg-white p-6 sm:flex-row">
             <div className="flex-shrink-0 text-center">
               <ScoreDial score={overallScore(result.objectives)} size={120} />
@@ -337,6 +366,8 @@ export default function OkrForm() {
               </ol>
             </div>
           )}
+
+          <p className="mt-6 text-center font-mono text-[10px] text-gray-400">run {result.run_id}</p>
         </div>
       )}
     </div>
